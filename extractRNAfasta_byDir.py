@@ -25,7 +25,7 @@ def process_sequences(input_file, output_file):
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        print("Usage: python myprogram.py /path_to_input/ /path_to_output/")
+        print("Usage: python extractRNAfasta_byDir.py /path_to_input/ /path_to_output/")
         sys.exit(1)
 
     input_dir = sys.argv[1]
