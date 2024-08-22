@@ -7,5 +7,5 @@ Custom scripts for identifying off-target RNA editing events from RNA-seq data. 
    - **Usage**: `python merge_samples.py <Sample1_path> <Sample2_path> <output_path>`
 3) Run the `remove_common.py` script to remove events found in common between controls and samples.
    - **Usage**: `python remove_common.py <input1_path> <input2_path> <output_path>`
-4) Extract the `.fasta` lists using the `extractRNAfasta_byDir.py` script for downstream analyses with PPRmatcher.
+4) Extract the `.fasta` lists using the `extractRNAfasta_byDir.py` script for downstream analyses with [PPRmatcher](https://github.com/ian-small/PPRmatcher).
    - **Usage**: `python extractRNAfasta_byDir.py <path_to_input_dir> <path_to_output_dir>`
