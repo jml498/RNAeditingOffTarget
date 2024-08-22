@@ -3,6 +3,7 @@ Custom scripts for identifying off-target RNA editing events from RNA-seq data. 
 
 # Pre-processing
 First, analyze the aligned BAM files with [JACUSA2](https://github.com/dieterich-lab/JACUSA2) with the *call-2* option.
+
 $ java -jar jacusa2.jar call-2 results_call2.out Sample#.bam
    - **Flags**: -R `reference2.fasta` -r `Sample#_call2-FS.vcf` -P `RF-FIRSTSTRAND`
 
