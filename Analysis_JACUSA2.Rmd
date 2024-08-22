@@ -1,0 +1,321 @@
+
+---
+title: "Analysis of JACUSA for RNA Editing Off-target Identification"
+author: "Jose Lombana"
+date: '2024-08-25'
+output:
+  pdf_document: default
+  word_document: default
+  html_document: default
+---
+This R Markdown file documents the analysis pipeline for identifying off-target RNA editing events using the JACUSA2 tool. The file includes steps for loading necessary libraries and data, processing the data to detect potential C-to-U and G-to-A editing events, filtering and annotating the data, and preparing the final dataset for output. Each section of the Rmd file is designed to ensure reproducibility and clarity, with comments explaining each step of the process.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load Libraries
+```{r}
+library(dplyr)
+```
+
+## Load Data
+```{r}
+setwd("path_to_your_directory")
+data <- read.csv("path_to_your_file/Sample1#_final_call2-FS.csv", 
+                 header = TRUE, skip = 0, fill = TRUE, comment.char = "")
+```
+
+## Split 'bases11' and 'bases21' Columns
+```{r}
+data$bases11 <- as.character(data$bases11)
+bases_counts11 <- do.call(rbind, strsplit(data$bases11, ","))
+data$bases21 <- as.character(data$bases21)
+bases_counts21 <- do.call(rbind, strsplit(data$bases21, ","))
+data <- cbind(data, bases_counts11, bases_counts21)
+names(data)[12:19] <- c("A_count11", "C_count11", "G_count11", "T_count11",
+                        "A_count21", "C_count21", "G_count21", "T_count21")
+```
+
+## Convert Columns to Numeric
+```{r}
+data$A_count11 <- as.numeric(data$A_count11)
+data$C_count11 <- as.numeric(data$C_count11)
+data$G_count11 <- as.numeric(data$G_count11)
+data$T_count11 <- as.numeric(data$T_count11)
+data$A_count21 <- as.numeric(data$A_count21)
+data$C_count21 <- as.numeric(data$C_count21)
+data$G_count21 <- as.numeric(data$G_count21)
+data$T_count21 <- as.numeric(data$T_count21)
+```
+
+## Identify C-to-U and G-to-A Events
+```{r}
+c_to_t <- data[data$ref == 'C' & data$T_count21 > 5, ]
+g_to_a <- data[data$ref == 'G' & data$A_count21 > 5, ]
+c_to_t$variation <- 'c_to_t'
+g_to_a$variation <- 'g_to_a'
+c_to_u_events <- rbind(c_to_t, g_to_a)
+c_to_u_events <- c_to_u_events[order(as.numeric(rownames(c_to_u_events))), ]
+```
+
+## Filter and Add Total Count Columns
+```{r}
+filtered_events <- bind_rows(c_to_t, g_to_a)
+filtered_events <- filtered_events %>%
+  mutate(Total_count11 = A_count11 + C_count11 + G_count11 + T_count11) %>%
+  mutate(Total_count = A_count21 + C_count21 + G_count21 + T_count21)
+```
+
+## Calculate Percent Editing and Error
+```{r}
+filtered_events$percent_editing11 <- with(filtered_events, ifelse(ref=="C", 
+                                                                  (T_count11 / (T_count11 + C_count11)) * 100, 
+                                                                  (A_count11 / (A_count11 + G_count11)) * 100))
+filtered_events$percent_editing21 <- with(filtered_events, ifelse(ref=="C", 
+                                                                  (T_count21 / (T_count21 + C_count21)) * 100, 
+                                                                  (A_count21 / (A_count21 + G_count21)) * 100))
+filtered_events$percent_error <- with(filtered_events, ifelse(ref=="C", 
+                                                              ((A_count21 + G_count21) / Total_count) * 100, 
+                                                              ((T_count21 + C_count21) / Total_count) * 100))
+
+filtered_events$percent_editing21[is.na(filtered_events$percent_editing21) | is.infinite(filtered_events$percent_editing21)] <- 0
+filtered_events$percent_editing11[is.na(filtered_events$percent_editing11) | is.infinite(filtered_events$percent_editing11)] <- 0
+filtered_events$percent_error[is.na(filtered_events$percent_error) | is.infinite(filtered_events$percent_error)] <- 0
+```
+
+## Set Thresholds and Filter Events
+```{r}
+q1 <- quantile(filtered_events$Total_count11, probs = seq(0, 1, by = 0.05))
+q15 <- as.numeric(q1["5%"])
+q <- quantile(filtered_events$Total_count, probs = seq(0, 1, by = 0.01))
+q01 <- as.numeric(q["1%"])
+q05 <- as.numeric(q["5%"])
+q10 <- as.numeric(q["10%"])
+qs <- quantile(filtered_events$score, probs = seq(0, 1, by = 0.01), na.rm=TRUE)
+qs95 <- as.numeric(qs["95%"])
+qs98 <- as.numeric(qs["98%"])
+qs99 <- as.numeric(qs["99%"])
+
+filtered_events21 <- filtered_events %>%
+  filter(percent_editing21 >= 1 & 
+         (percent_editing11 / percent_editing21) <= 0.8 & 
+         (percent_error / percent_editing21) <= 0.06 & 
+         percent_editing21 - percent_editing11 >= 1 & 
+         Total_count11 >= 190 &
+         ((percent_editing21 - percent_editing11 >= 10 & score >= qs95) | 
+          (percent_editing21 - percent_editing11 < 10 & score >= qs98)))
+
+filtered_events21 <- filtered_events21 %>% mutate(percent_error/percent_editing21)
+```
+
+## Exclude Genomic Regions and Artifacts
+```{r}
+filtered_events21 <- filtered_events21 %>%
+  filter(!((end >= 4000 & end <= 5900) & contig == "dsn3PLS-DYW-pETDuet-1-rpoA"))
+
+filtered_events <- arrange(filtered_events, desc(score))
+filtered_events21$score <- as.numeric(filtered_events21$score)
+filtered_events21 <- arrange(filtered_events21, desc(score))
+
+```
+
+## Prepare the gtf file
+```{r}
+#Load Libraries
+library(dplyr)
+library(rtracklayer)
+
+# Load the GTF file
+gtf_path <- "CP01816.1.gtf" # Make sure this path is correct
+gtf_data <- import(gtf_path)
+
+# Convert GTF data to a data frame
+gtf_df <- as.data.frame(gtf_data)
+
+events_cp010816 <- filtered_events21 %>% 
+  filter(contig == "CP010816.1")
+
+events_pETDuet1 <- filtered_events21 %>% 
+  filter(contig != "CP010816.1")
+```
+
+## Set genomic regions
+```{r}
+library(Biostrings)
+
+# Load the custom FASTA file
+fasta_path <- "reference3.fasta" # Adjust this path to your FASTA file
+dna_string_set <- readDNAStringSet(fasta_path)
+
+# Access the names of the DNAStringSet object
+sequence_names <- names(dna_string_set)
+
+# Ensure the names match your reference sequences
+names(dna_string_set) <- c("CP010816.1", "dsn3PLS-DYW-pETDuet-1-rpoA", "pRARE2")
+print(names(dna_string_set))
+
+get_custom_sequence <- function(chromosome, position, ref, strand, window = 20) {
+  # Ensure chromosome is in the names of DNA_string_set
+  if (!(chromosome %in% names(dna_string_set))) {
+    stop("Chromosome not found in DNAStringSet.")
+  }
+  
+  # Extract the DNA sequence for the specified chromosome
+  dna_sequence <- dna_string_set[[chromosome]]
+  
+  # Calculate start and end positions, ensuring they don't exceed sequence bounds
+  start_pos <- max(1, position - window)
+  end_pos <- min(length(dna_sequence), position + window)
+  
+  # Extract the sequence using subseq
+  extracted_seq <- subseq(dna_sequence, start = start_pos, end = end_pos)
+  
+  # Additional filtering based on reference base and strand
+  if (ref == "G" && strand == "+") {
+    # Get the reverse complement if ref is G and strand is "+"
+    extracted_seq <- reverseComplement(extracted_seq)
+  } else if (ref == "C" && strand == "-") {
+    # Get the reverse complement if ref is C and strand is "-"
+    extracted_seq <- reverseComplement(extracted_seq)
+  }
+  
+  return(as.character(extracted_seq))
+}
+
+
+events_final <- filtered_events21
+events_cp010816s <- events_cp010816
+```
+
+## Prepare for annotation
+```{r}
+events_final$sequence <- Vectorize(get_custom_sequence)(chromosome = events_final$contig, position = events_final$end, ref = events_final$ref, strand = events_final$strand, window = 20)
+
+events_cp010816s$sequence <- Vectorize(get_custom_sequence)(chromosome = events_cp010816s$contig, position = events_cp010816s$end, ref = events_cp010816s$ref, strand = events_cp010816s$strand, window = 20)
+
+events_pETDuet1$sequence <- Vectorize(get_custom_sequence)(chromosome = events_pETDuet1$contig, position = events_pETDuet1$end, ref = events_pETDuet1$ref, strand = events_pETDuet1$strand, window = 20)
+
+
+events_final <- arrange(events_final, desc(score))
+events_cp010816s <- arrange(events_cp010816s, desc(score))
+events_pETDuet1 <- arrange(events_pETDuet1, desc(score))
+```
+
+## Annotate
+```{r}
+# Selecting only the necessary columns from gtf_df for the join
+gtf_selected <- gtf_df %>%
+  select(start, end, strand, source, type, gene_id)
+
+# Create a new column in events_cp010816a to store the annotations
+events_cp010816a <- events_cp010816
+events_cp010816a$annotation <- NA
+
+# Loop through events_cp010816a to find and assign annotation details
+for (i in 1:nrow(events_cp010816a)) {
+  # Extract the current end position
+  current_end <- events_cp010816a$end[i]
+  
+  # Find matches based on the end position falling between start and end positions of gtf_selected
+  matched_rows <- which(current_end >= gtf_selected$start & current_end <= gtf_selected$end)
+  
+  # If matches are found, construct the annotation string
+  if (length(matched_rows) > 0) {
+    annotation_str <- paste("strand:", gtf_selected$strand[matched_rows],
+                            ", source:", gtf_selected$source[matched_rows],
+                            ", type:", gtf_selected$type[matched_rows],
+                            ", gene_id:", gtf_selected$gene_id[matched_rows])
+    
+    events_cp010816a$annotation[i] <- paste(annotation_str, collapse=";")
+  } else {
+    # For "Unannounced" events, leave the annotation column empty
+    events_cp010816a$annotation[i] <- ""
+  }
+}
+
+# Initialize empty data frame to store parsed annotations
+events_cp010816a_parsed <- data.frame(strandA = character(nrow(events_cp010816a)),
+                                      source = character(nrow(events_cp010816a)),
+                                      type = character(nrow(events_cp010816a)),
+                                      gene_id = character(nrow(events_cp010816a)),
+                                      stringsAsFactors = FALSE)
+
+# Iterate over each entry in the annotation column and parse annotations
+for (i in seq_along(events_cp010816a$annotation)) {
+  # Check if there are any annotations present
+  if (nchar(events_cp010816a$annotation[i]) > 0) {
+    # Split each entry in the annotation column by semicolons
+    annotations_split <- strsplit(events_cp010816a$annotation[i], ";")[[1]]
+    
+    # Iterate over each annotation
+    for (j in seq_along(annotations_split)) {
+      # Split each annotation by commas
+      annotation_parts <- strsplit(trimws(annotations_split[j]), ",")[[1]]
+      
+      # Extract individual annotation components
+      for (k in seq_along(annotation_parts)) {
+        annotation <- trimws(annotation_parts[k])
+        if (grepl("^strand:", annotation)) {
+          events_cp010816a_parsed$strandA[i] <- gsub("^strand: ", "", annotation)
+        } else if (grepl("^source:", annotation)) {
+          events_cp010816a_parsed$source[i] <- gsub("^source: ", "", annotation)
+        } else if (grepl("^type:", annotation)) {
+          events_cp010816a_parsed$type[i] <- gsub("^type: ", "", annotation)
+        } else if (grepl("^gene_id:", annotation)) {
+          events_cp010816a_parsed$gene_id[i] <- gsub("^gene_id: ", "", annotation)
+        }
+      }
+    }
+  } else {
+    # If no annotation is present, assign NA values to all columns
+    events_cp010816a_parsed[i, ] <- NA
+  }
+}
+
+# Combine events_cp010816s and events_cp010816a_parsed
+combined_data <- cbind(events_cp010816s, events_cp010816a_parsed)
+
+# Create a new data frame to store the filtered data
+filtered_combined_data <- combined_data
+
+#Add new cols to 
+events_pETDuet1 <- events_pETDuet1 %>%
+  mutate(strandA = NA,
+         source = NA,
+         type = NA,
+         gene_id = NA)
+```
+
+## Exclude Genomic Regions and Artifacts2
+```{r}
+# Filter out genomic regions
+filtered_combined_data <- filtered_combined_data %>%
+  filter(!((end >= 535000 & end <= 537000) & contig == "CP010816.1")) #Genomic Region 1 (crappy mapping)
+filtered_combined_data <- filtered_combined_data %>%
+  filter(!((end >= 546000 & end <= 551000) & contig == "CP010816.1")) #Genomic region2 (crappy mapping)
+filtered_combined_data <- filtered_combined_data %>%
+  filter(!((end >= 748000 & end <= 761000) & contig == "CP010816.1")) #Genomic Region 3 (InDel)
+
+
+#Filter out artifacts
+filtered_combined_data <- filtered_combined_data %>%
+  filter(!((end == 134331 | end == 335738 | end == 335944 | end == 633900 | end == 1560279 | end == 2503470 | end == 2849710 | end == 3520168 | end == 3522707 | end == 3550771 | end == 3898134 | end == 3960021 | end == 3960024 | end == 4246883 | end == 3738115) & contig == "CP010816.1"))
+
+
+```
+
+## Final Data Preparation and Output
+```{r}
+final_data <- bind_rows(events_pETDuet1, filtered_combined_data) %>%
+  filter(contig != "pRARE2") %>%
+  arrange(desc(percent_editing21))
+
+#Correct for strand
+final_data_strandCorrected <- final_data %>%
+  filter((strand == "+" & ref == "C") | (strand == "-" & ref == "C"))
+final_data_strandCorrected$percent_editing21 <- as.numeric(final_data_strandCorrected$percent_editing21)
+final_data_strandCorrected <- arrange(final_data_strandCorrected, desc(percent_editing21))
+
+write.csv(final_data_strandCorrected, "path_to_output/Sample#_final_strandCorrected_c15_conditionalScore.csv", row.names = FALSE)
+```
