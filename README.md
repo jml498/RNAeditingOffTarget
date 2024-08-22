@@ -1,8 +1,13 @@
 # RNA editing Off-Target Analysis
 Custom scripts for identifying off-target RNA editing events from RNA-seq data. These tools help detect, quantify, and analyze off-target editing sites, offering a streamlined pipeline for researchers in RNA editing. Optimized for high-throughput data processing and adaptable for various downstream analyses.
 
+# Pre-processing
+First, analyze the aligned BAM files with [JACUSA2](https://github.com/dieterich-lab/JACUSA2) with the *call-2* option.
+$ java -jar jacusa2.jar call-2 results_call2.out Sample#.bam
+   - **Flags**: -R `reference2.fasta` -r `Sample#_call2-FS.vcf` -P `RF-FIRSTSTRAND`
+
 # INSTRUCTIONS
-1) Run the JACUSA2 CSV files through the `Analysis_JACUSA2.Rmd` script. This will generate `.csv` tables for downstream analyses.
+1) Run the [JACUSA2](https://github.com/dieterich-lab/JACUSA2) output `.CSV` files through the `Analysis_JACUSA2.Rmd` script. This will generate `.csv` tables for downstream analyses.
 2) Run the `merge_samples.py` script to merge together control files.
    - **Usage**: `python merge_samples.py <Sample1_path> <Sample2_path> <output_path>`
 3) Run the `remove_common.py` script to remove events found in common between controls and samples.
