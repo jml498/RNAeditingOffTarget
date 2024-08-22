@@ -21,7 +21,7 @@ def remove_matches(file1_path, file2_path, output_file):
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
-        print("Usage: python remove_matches.py <input1_path> <input2_path> <output_path>")
+        print("Usage: python remove_common.py <input1_path> <input2_path> <output_path>")
         sys.exit(1)
     
     input1, input2, output = sys.argv[1], sys.argv[2], sys.argv[3]
